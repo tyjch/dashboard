@@ -1,0 +1,4 @@
+pandas==2.2.3
+dash==3.0.3
+python-dotenv==1.1.0
+influxdb-client==1.48.0

@@ -7,8 +7,9 @@ import numpy as np
 from data.influx import InfluxDB
 from datetime import date, datetime, time, timedelta, timezone
 from streamlit_autorefresh import st_autorefresh
+from components.metrics import latest_temperature_metric, last_measurement_metric
 
-count = st_autorefresh(interval=10000, key='refresh_count')
+#count = st_autorefresh(interval=20000, key='refresh_count')
 
 db = InfluxDB()
 
@@ -20,7 +21,7 @@ def get_influx_data():
     return f"{scalar}{period}"
   
   def get_datetime_range():
-    session_stop = st.session_state.get('filters.date.stop')
+    session_stop  = st.session_state.get('filters.date.stop')
     session_start = st.session_state.get('filters.date.start')
     
     tz = pytz.timezone('America/Los_Angeles')
@@ -51,95 +52,125 @@ def get_influx_data():
   return db.run_query(query)
 
 
-st.session_state.data = get_influx_data()
-  
-def temperature_metric():
-  baseline_temp = st.session_state.get('settings.temperature.baseline', 97.5)
-  # TODO: Filter and remove bias
-  query = '''
-  from(bucket: "thermometer")
-    |> range(start: -7d, stop: now())
-    |> filter(fn: (r) => r["_measurement"] == "DS18B20")
-    |> filter(fn: (r) => r["dimension"] == "temperature")
-    |> filter(fn: (r) => r["unit"] == "degree_fahrenheit")
-    |> filter(fn: (r) => r["_field"] == "value")
-    |> filter(fn: (r) => r["sensor_id"] == "28-3c01f09622a2")
-    |> map(fn: (r) => ({r with raw_temp: r._value, adjusted_temp: r._value + float(v: r.bias)}))
-    |> drop(columns: ["bias"])
-    |> last()
-  '''
-  df = db.run_query(query)
-  current_temp = float(df['adjusted_temp'].iloc[-1])
-  
-  return st.metric(
-    label = 'Current Temperature',
-    value = f'{current_temp:.1f} °F',
-    delta = f'{current_temp-baseline_temp:.1f} °F'
-  )
+# st.session_state.data = get_influx_data()
 
-def last_measurement_metric():
-  query = '''
-  from(bucket: "thermometer")
-    |> range(start: -7d, stop: now())
-    |> filter(fn: (r) => r["_measurement"] == "DS18B20")
-    |> filter(fn: (r) => r["dimension"] == "temperature")
-    |> filter(fn: (r) => r["unit"] == "degree_fahrenheit")
-    |> filter(fn: (r) => r["_field"] == "value")
-    |> filter(fn: (r) => r["sensor_id"] == "28-3c01f09622a2")
-    |> map(fn: (r) => ({r with raw_temp: r._value, adjusted_temp: r._value + float(v: r.bias)}))
-    |> drop(columns: ["bias"])
-    |> last()
-  '''
-  df = db.run_query(query)
-  df
-  
-  if not df.empty:
-    last_time = pd.to_datetime(df['_time'].iloc[-1])
-    now = datetime.now(timezone.utc)
+def line_chart():
+  query = f'''
+    import "math"
     
-    if last_time > now:
-      text = "Just now"
-    else:
-      delta = now - last_time
-      total_seconds = delta.total_seconds()
+    roundFloat = (value, places) => {{
+      multiplier = math.pow10(n: places)
+      return math.round(x: value * multiplier) / multiplier 
+    }}
+
+    bias = from(bucket: "thermometer")
+      |> range(start: -1h, stop: now())
+      |> filter(fn: (r) => r["_measurement"] == "DS18B20")
+      |> filter(fn: (r) => r["_field"] == "bias")
+      |> keep(columns: ["_time", "_value", "sensor_id", "unit"])
+      |> rename(columns: {{_value: "bias_value"}})
       
-      if total_seconds < 60:
-        text = "Just now"
-      elif total_seconds < 3600:
-        text = f"{int(total_seconds // 60)}m ago"
-      elif total_seconds < 86400:
-        text = f"{int(total_seconds // 3600)}h ago"
-      else:
-        text = f"{int(total_seconds // 86400)}d ago"
-    
-    return st.metric(
-      label = 'Last Measured',
-      value = text
+    temperature = from(bucket: "thermometer")
+      |> range(start: -1h, stop: now())
+      |> filter(fn: (r) => r["_measurement"] == "DS18B20")
+      |> filter(fn: (r) => r["_field"] == "temperature")
+      |> keep(columns: ["_time", "_value", "sensor_id", "unit"])
+      |> rename(columns: {{_value: "temperature_value"}})
+      
+    // Join and create the combined value
+    join(
+      tables : {{bias: bias, temperature: temperature}},
+      on     : ["_time", "sensor_id", "unit"]
     )
-  else:
-    return st.metric(
-      label = 'Last Measured',
-      value = 'Unknown'
-    )
+    |> map(fn: (r) => ({{
+        _time     : r._time,
+        _value    : roundFloat(value: r.bias_value + r.temperature_value, places: 1),
+        sensor_id : r.sensor_id,
+        unit      : r.unit
+    }}))
+    // |> difference()
+    |> derivative(unit: 1m, nonNegative: false, columns: ["_value"], timeColumn: "_time")
+  '''
+  df = db.run_query(query=query)
+  st.code(len(df))
+  st.dataframe(df.head())
   
-# # TODO
-# def temperature_state_metric():
-#   pass
+  st.line_chart(data=df, x='_time', y='_value')
+  
 
-# # TODO
-# def device_status_metric():
-#   pass
+def connection_state(
+  measurement            : str = 'DS18B20',
+  time_range             : str = '-24h',
+  derivative_window      : str = '5s',
+  connected_threshold    : int = 2,
+  disconnected_threshold : int = -1  
+):
+  db = InfluxDB()
+  
+  
+  
+  query = f'''
+  import "math"
+  
+  data = from(bucket: "thermometer")
+    |> range(start: -24h, stop: now())
+    |> filter(fn: (r) => r._measurement == "{measurement}")
+    |> filter(fn: (r) => r._field == "temperature")
+    
+  derivatives = data
+    |> derivative(unit: {derivative_window})
+    |> map(fn: (r) => ({{
+      _time      : r._time,
+      derivative : r._value,
+      magnitude  : math.abs(x: r._value)
+    }}))
+    |> filter(fn: (r) => r.magnitude > 0)
+    |> tail(n: 500)
+    
+  joined = join(
+    tables: {{
+      data: data,
+      derivatives: derivatives
+    }},
+    on: ["_time"]
+  )
+    |> map(fn: (r) => ({{r with direction: 
+      if r.derivative > 0 then "positive"
+      else if r.derivative < 0 then "negative"
+      else " "
+      }}))
+    |> stateTracking(fn: (r) => r.direction == "positive", countColumn: "positiveCount")
+    |> stateTracking(fn: (r) => r.direction == "negative", countColumn: "negativeCount")
+    |> map(fn: (r) => ({{r with count: math.mMax(x: float(v: r.positiveCount), y: float(v: r.negativeCount))}}))
+    |> yield(name: "joined")
+  
+  '''
 
-def metrics():
-  c1, c2 = st.columns(2, vertical_alignment='top')
-  with c1:
-    temperature_metric()
-  with c2:
-    last_measurement_metric()
+  
+  
+  query = query
+  st.code(query, line_numbers=True)
+  df = db.run_query(query=query)
+  
+  st.line_chart(
+    data = df,
+    x    = "_time",
+    y    = ["derivative", "_value"]
+  )
+  st.dataframe(df)
+  
+  
+  
+
+  
 
 
 st.header("Temperature Analysis")
 
-metrics()
-
-
+c1, c2 = st.columns(2, vertical_alignment='top')
+with c1:
+  latest_temperature_metric()
+with c2:
+  last_measurement_metric()
+  
+connection_state()

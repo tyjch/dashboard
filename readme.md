@@ -37,3 +37,8 @@ https://altair-viz.github.io/gallery/lasagna_plot.html
 - colors
 - date_range
 - sensors
+
+# To Do
+- Can initialize influxdb_client from .env or config file
+- Store colors in Influx as well
+- Load colors and limits from Influx on dashboard & device

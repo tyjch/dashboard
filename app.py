@@ -1,6 +1,5 @@
 import streamlit as st
 from components.sidebar import sidebar
-from components.header import header
 from components.footer import footer
 
 
@@ -21,8 +20,6 @@ def navigation():
         expanded = True
     )
     
-
-
 current_page = navigation()
 
 sidebar()

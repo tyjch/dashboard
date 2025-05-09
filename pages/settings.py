@@ -6,12 +6,12 @@ from st_aggrid import AgGrid, GridOptionsBuilder
 
 def status_color():
   status_defaults = {
-    'Off'     : {'color': '#969696', 'maximum': 95.0},
-    'Cold'    : {'color': '#3278dc', 'maximum': 96.5},
-    'Cool'    : {'color': '#82b4ff', 'maximum': 97.0},
-    'Average' : {'color': '#ffffff', 'maximum': 98.5},
-    'Warm'    : {'color': '#ffaa82', 'maximum': 99.0},
-    'Hot'     : {'color': '#ff825a', 'maximum': 999.0}
+    'disconnected' : {'color': '#ffffff', 'maximum': 95.0},
+    'cold'         : {'color': '#0068c9', 'maximum': 96.5},
+    'cool'         : {'color': '#83c9ff', 'maximum': 97.0},
+    'average'      : {'color': '#7defa1', 'maximum': 98.5},
+    'warm'         : {'color': '#ffabab', 'maximum': 99.0},
+    'hot'          : {'color': '#ff2b2b', 'maximum': 999.0}
   }
   
   with st.container(border=False):
@@ -21,27 +21,28 @@ def status_color():
       color = settings.get('color')
       limit = settings.get('maximum')
       
-      with st.expander(name):
+      with st.expander(name.capitalize()):
         color_col, limit_col = st.columns(2)
         
+        key = f'status.{name}.color'
         with color_col:
           selected_color = st.color_picker(
-          label            = 'Color',
-          key              = f"color_{name}",
-          value            = color, 
-          label_visibility = 'visible'
-        )
+            label            = 'Color',
+            key              = key,
+            value            = st.session_state[key],
+            label_visibility = 'visible'
+          )
           
         with limit_col:
           selected_limit = st.number_input(
-          label            = 'Upper Limit',
-          key              = f'status_{name}',
-          value            = limit,
-          step             = 0.1,
-          format           = '%0.1f',
-          label_visibility = 'visible',
-          disabled         = True if name == 'Hot' else False
-        )
+            label            = 'Upper Limit',
+            key              = f'status_{name}',
+            value            = limit,
+            step             = 0.1,
+            format           = '%0.1f',
+            label_visibility = 'visible',
+            disabled         = True if name == 'Hot' else False
+          )
         
   
       
